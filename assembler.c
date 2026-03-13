@@ -127,9 +127,8 @@ void getLabel(const char* line, char* label) {
     label[len - 2] = '\0';
 }
 
-void firstPass(FILE* file, SymbolTable* table) {
-    char line[MAX_LINE];
-    char editedLine[MAX_LINE];
+// Store first pass in function for cleaner code
+void firstPass(FILE* file, SymbolTable* table, char line[], char editedLine[]) {
     int romAddr = 0;
 
     rewind(file);
@@ -151,6 +150,7 @@ void firstPass(FILE* file, SymbolTable* table) {
         }
     }
 }
+
 
 // Usage: simpleCopy inFile outFile
 int main(int argc, char ** argv) {
@@ -230,6 +230,9 @@ int main(int argc, char ** argv) {
     insertKey(jumpMap, "JLE", "110");
     insertKey(jumpMap, "JMP", "111");
 
+    // Just use fixed-size char arrays
+    char line[MAX_LINE];
+    char editedLine[MAX_LINE];
 
     // FILE is a system structure
     // Open the input file in read mode
@@ -241,6 +244,14 @@ int main(int argc, char ** argv) {
         exit(1);
     }
 
+    SymbolTable* symTable = createTable();
+    
+    // First pass to collect all the labels
+    firstPass(fin, symTable, line, editedLine);
+
+    // Rewind to go back to the start for the second pass
+    rewind(fin);
+
     FILE *fout;
     // Open second file for writing; this will replace the file if it exists
     fout = fopen(outFileName, "w");
@@ -249,40 +260,59 @@ int main(int argc, char ** argv) {
         exit(1);
     }
 
-    // Just use fixed-size char arrays
-    char line[MAX_LINE];
-    char editedLine[MAX_LINE];
-
     // read the first line
     fgets(line, MAX_LINE,  fin);  
     // feof() returns 1 (true) if we have reached the end of file
-    while(!feof(fin)) {
-
+    // feof() had to get changed to the following since it would never read the last line of the .asm files
+    while(fgets(line, MAX_LINE, fin) != NULL) {
         removeSpacesAndComments(editedLine, line);
 
         // ONLY print lines that have text in them
-        if(editedLine[0] != '\0') {
+        if(editedLine[0] != '\0' && !isLabel(editedLine)) {
             // Checks if the command is an A instruction
             if (editedLine[0] == '@') {
+                char *numStr = editedLine + 1;
 
-                
-                char *numStr = editedLine + 1;   
-                int value = atoi(numStr);        
-                char binary[17];                  
-                binary[0] = '0';                  
+                if (isNum(numStr)) {
+                    int value = atoi(numStr);        
+                    char binary[17];                  
+                    binary[0] = '0';                  
 
-                
-                // Generates 15 bits
-                for (int i = 15; i >= 0; i--) {
-                    binary[i] = (value & 1) ? '1' : '0';
-                    value >>= 1;
+                    // Generates 15 bits
+                    for (int i = 15; i >= 0; i--) {
+                        binary[i] = (value & 1) ? '1' : '0';
+                        value >>= 1;
+                    }
+
+                    binary[16] = '\0';
+                    fputs(binary, fout);
+                    fputs("\n", fout);
+                } else { // Else it has to be a C instruction
+
+                char* addrStr = lookupKey(symTable->symbolMap, numStr);
+
+                // Allocate address for variable
+                if (addrStr == NULL) {
+                    char newAddr[10];
+
+                    sprintf(newAddr, "%d", symTable->nextAddr);
+                    insertKey(symTable->symbolMap, numStr, newAddr);
+
+                    addrStr = newAddr;
+                    symTable->nextAddr++;
                 }
+                
+                int value = atoi(addrStr);
+                char binary[17];
 
+                for (int i = 15; i >= 0; i--) {
+                    binary[15 - i] = ((value >> i) & 1) ? '1' : '0';
+                }
 
                 binary[16] = '\0';
                 fputs(binary, fout);
                 fputs("\n", fout);
-
+                }
             } else {
                 char destStr[10] = "null";
                 char compStr[10] = "";
@@ -334,10 +364,12 @@ int main(int argc, char ** argv) {
                 sprintf(binary, "111%s%s%s", compBin, destBin, jumpBin);
                 fputs(binary, fout);
                 fputs("\n", fout);
+                
             }
         }
-        fgets(line, MAX_LINE,  fin); // read the next one
     }
+
+    
 
     // Make sure to close open files before exiting
     fclose(fin);
@@ -345,6 +377,7 @@ int main(int argc, char ** argv) {
     freeMap(compMap);
     freeMap(destMap);
     freeMap(jumpMap);
+    freeSymbolTable(symTable);
 
 
     printf("Copied %s to %s\n", inFileName, outFileName);
